@@ -1,0 +1,8 @@
+/* Override of pico-sdk's (empty) memory_extra.incl.
+   emu_ram must live at exactly 0x20030000 - sram.pio hardcodes this
+   address to combine it with the received SPI address with zero added
+   latency on READ. Immediately follows the shrunk RAM region above. */
+MEMORY
+{
+    SPI_RAM(rw) : ORIGIN = 0x20030000, LENGTH = 64k
+}

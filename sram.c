@@ -17,6 +17,15 @@ static int pio_read_offset;
 
 uint8_t __attribute__((section(".spi_ram.emu_ram"))) emu_ram[65536];
 
+volatile sram_transaction_log_t sram_last_transaction;
+
+static inline void log_transaction(uint8_t cmd, uint16_t addr, bool addr_valid) {
+    sram_last_transaction.cmd        = cmd;
+    sram_last_transaction.addr       = addr;
+    sram_last_transaction.addr_valid = addr_valid;
+    sram_last_transaction.seq++;
+}
+
 static void setup_sram_pio()
 {
     pio_read_offset = pio_add_program(SIM_SRAM_pio_read, &sram_read_program);
@@ -105,6 +114,14 @@ static void __scratch_x("core1_main") core1_main()
             // direct to the read address of the transmit DMA channel.
             dma_channel_start(SIM_SRAM_tx_channel2);
 
+            // Debug only: tx_channel2's single-word transfer lands the target
+            // address in tx_channel's read_addr as soon as the read PIO has
+            // finished receiving it - which has to happen before the write
+            // PIO can start sending data anyway, so waiting for it here adds
+            // no extra latency to the response itself.
+            while (dma_channel_is_busy(SIM_SRAM_tx_channel2));
+            log_transaction(cmd, (uint16_t)(dma_hw->ch[SIM_SRAM_tx_channel].read_addr & 0xFFFF), true);
+
             wait_for_cs_high();
             dma_channel_abort(SIM_SRAM_tx_channel);
         }
@@ -121,6 +138,7 @@ static void __scratch_x("core1_main") core1_main()
             uint32_t addr = pio_sm_get_blocking(SIM_SRAM_pio_read, SIM_SRAM_pio_read_sm);
             addr |= pio_sm_get_blocking(SIM_SRAM_pio_read, SIM_SRAM_pio_read_sm);
             dma_hw->ch[SIM_SRAM_tx_channel].al3_read_addr_trig = addr;
+            log_transaction(cmd, (uint16_t)(addr & 0xFFFF), true);
 
             wait_for_cs_high();
             dma_channel_abort(SIM_SRAM_tx_channel);
@@ -142,10 +160,14 @@ static void __scratch_x("core1_main") core1_main()
             wait_for_cs_high();
             while (!pio_sm_is_rx_fifo_empty(SIM_SRAM_pio_read, SIM_SRAM_pio_read_sm));
             dma_channel_abort(SIM_SRAM_rx_channel);
+            // Logged after the write has actually landed in emu_ram, so a
+            // debug reader sees the final stored value, not the old one.
+            log_transaction(cmd, (uint16_t)(addr & 0xFFFF), true);
         }
         else {
             // Ignore unknown command
             wait_for_cs_high();
+            log_transaction(cmd, 0, false);
         }
         pio_sm_set_enabled(SIM_SRAM_pio_write, SIM_SRAM_pio_write_sm, false);
         pio_sm_clear_fifos(SIM_SRAM_pio_write, SIM_SRAM_pio_write_sm);

@@ -1,0 +1,8 @@
+/* Override of pico-sdk's memory_ram.incl.
+   Shrinks general RAM to 192k so it can't grow into the 64k SPI_RAM
+   region carved out below (see memory_extra.incl) - if it ever did,
+   the linker's own "region RAM overflowed" check will catch it. */
+MEMORY
+{
+    RAM(rwx) : ORIGIN = 0x20000000, LENGTH = 192k
+}

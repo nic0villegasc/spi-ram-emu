@@ -1,213 +1,82 @@
 #include <pico/stdlib.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
-#include <hardware/pio.h>
-
 extern "C" {
-    #include "logic.h"
     #include "sram.h"
-
-    #include "pio_spi.h"
 }
 
-uint32_t logic_buf[1024];
+// "Hello world" program for the manquehuito CPU: sets both PWM duty
+// registers to ~50% and enables the output with a small dead time.
+// See manquehuito's control_unit.v / ps_pwm_wrapper.v for the opcode
+// and MMIO map this was assembled against.
+//
+// No JMP at the end - the JMP-doesn't-stick hardware issue (see chat
+// history) means we can't rely on it. Instead this relies only on
+// mechanisms observed working reliably across every captured run: the
+// zeroed RAM past the program decodes as harmless "MOV A,B" no-ops, and
+// the 8-bit PC wraps 255->0 on its own, re-running this setup forever.
+static const uint8_t hello_pwm[] = {
+    0x04, 0x40,   // MOV A, 64
+    0x4F, 0x74,   // MOV (0xF4), A
+    0x04, 0x40,   // MOV A, 64
+    0x4F, 0x75,   // MOV (0xF5), A
+    0x04, 0x25,   // MOV A, 0x25
+    0x4F, 0x76,   // MOV (0xF6), A
+};
 
 int main() {
     stdio_init_all();
 
     uint8_t* emu_ram = setup_simulated_sram();
 
-    // Init the RAM to known values
-    for (int i = 0; i < 65536; ++i) emu_ram[i] = i;
+    // Clear RAM, then load the program at address 0 (the CPU's reset vector).
+    memset(emu_ram, 0, 65536);
+    memcpy(emu_ram, hello_pwm, sizeof(hello_pwm));
 
-    sleep_ms(5000);
-
-#if 0
-    pio_spi_inst_t spi = {
-        .pio = pio1,
-        .sm = pio_claim_unused_sm(pio1, true),
-        .cs_pin = SIM_SRAM_SPI_CS
-    };
-
-    gpio_init(SIM_SRAM_SPI_CS);
-    gpio_put(SIM_SRAM_SPI_CS, true);
-    gpio_set_dir(SIM_SRAM_SPI_CS, true);
-
-    uint pio_spi_offset = pio_add_program(spi.pio, &spi_cpha0_program);
-
-    pio_spi_setup(&spi);
-
-    constexpr int BUF_LEN = 8 + 4;
-    uint8_t out_buf[BUF_LEN], in_buf[BUF_LEN];
-
-    //int logic_sm = pio_claim_unused_sm(pio1, true);
-    //logic_analyser_init(pio1, logic_sm, SIM_SRAM_SPI_MOSI, 4, 1);
-
-    int speed_incr = 1;
-    for (int divider = 12; divider > 1; divider -= speed_incr) 
-    {
-        if (divider <= 3) divider = 4;
-
-        pio_spi_init(spi.pio, spi.sm, pio_spi_offset, 8, divider, false, false, SIM_SRAM_SPI_SCK, SIM_SRAM_SPI_MOSI, SIM_SRAM_SPI_MISO);
-        printf("\nTesting at %.03fMHz\n", 125.f/(2 * divider));
-        for (int runs = 0; runs < 2000; ++runs) {
-            int addr = (rand() % (65536 - BUF_LEN)) & ~3;
-
-#if 1
-            // Read 8 bytes from addr
-            //logic_analyser_arm(pio1, logic_sm, 11, logic_buf, 128, SPI_CS, false);
-            out_buf[0] = 0x3;
-            out_buf[1] = addr >> 8;
-            out_buf[2] = addr & 0xff;
-            memset(&out_buf[3], 0, 9);
-            gpio_put(SIM_SRAM_SPI_CS, false);
-            pio_spi_write8_read8_blocking(&spi, out_buf, in_buf, BUF_LEN);
-            gpio_put(SIM_SRAM_SPI_CS, true);
-
-#if 0
-            printf("Read from addr %04x: ", addr);
-            bool ok = true;
-            uint8_t* data_buf = &in_buf[3];
-            for (int i = 0; i < 8; ++i) {
-                printf("%02hhx ", data_buf[i]);
-                if (data_buf[i] != emu_ram[addr + i]) ok = false;
-            }
-            printf("%s", ok ? "OK\n" : "FAIL!\n");
-#else
-            bool ok = true;
-            uint8_t* data_buf = &in_buf[3];
-            for (int i = 0; i < 9; ++i) {
-                if (data_buf[i] != emu_ram[addr + i]) ok = false;
-            }
-#endif
-            //print_capture_buf(logic_buf, 18, 4, 128*8);
-            //sleep_ms(1000);
-            //sleep_us(1);
-            if (!ok) {
-                printf("Read from addr %04x: ", addr);
-                uint8_t* data_buf = &in_buf[3];
-                for (int i = 0; i < 8; ++i) {
-                    printf("%02hhx ", data_buf[i]);
-                }
-                printf("FAIL!\nExpected:            ");
-                for (int i = 0; i < 8; ++i) {
-                    printf("%02hhx ", emu_ram[addr + i]);
-                }
-                printf("\n");
-                //print_capture_buf(logic_buf, 18, 4, 128*8);
-                divider += 2;
-                speed_incr = 1;
-                break;
-            }
-#endif 
-
-#if 1
-            // Fast read 8 bytes from addr
-            addr = rand() % (65536 - BUF_LEN);
-            out_buf[0] = 0xB;
-            out_buf[1] = addr >> 8;
-            out_buf[2] = addr & 0xff;
-            memset(&out_buf[3], 0, 9);
-            gpio_put(SIM_SRAM_SPI_CS, false);
-            pio_spi_write8_read8_blocking(&spi, out_buf, in_buf, BUF_LEN);
-            gpio_put(SIM_SRAM_SPI_CS, true);
-
-#if 0
-            printf("Fast read from addr %04x: ", addr);
-            bool ok = true;
-            uint8_t* data_buf = &in_buf[4];
-            for (int i = 0; i < 8; ++i) {
-                printf("%02hhx ", data_buf[i]);
-                if (data_buf[i] != emu_ram[addr + i]) ok = false;
-            }
-            printf("%s", ok ? "OK\n" : "FAIL!\n");
-#else
-            ok = true;
-            data_buf = &in_buf[4];
-            for (int i = 0; i < 8; ++i) {
-                if (data_buf[i] != emu_ram[addr + i]) ok = false;
-            }
-#endif
-            //print_capture_buf(logic_buf, 18, 4, 128*8);
-            //sleep_ms(1000);
-            //sleep_us(1);
-            if (!ok) {
-                printf("Fast read from addr %04x: ", addr);
-                uint8_t* data_buf = &in_buf[4];
-                for (int i = 0; i < 8; ++i) {
-                    printf("%02hhx ", data_buf[i]);
-                }
-                printf("FAIL!\nExpected:                 ");
-                for (int i = 0; i < 8; ++i) {
-                    printf("%02hhx ", emu_ram[addr + i]);
-                }
-                printf("\n");
-                divider += 2;
-                speed_incr = 1;
-                break;
-            }
-#endif
-
-            // Write 8 bytes to addr
-            addr = rand() % (65536 - BUF_LEN);
-            out_buf[0] = 0x2;
-            out_buf[1] = addr >> 8;
-            out_buf[2] = addr & 0xff;
-            for (int i = 0; i < 8; ++i) {
-                out_buf[i+3] = rand();
-            }
-            gpio_put(SIM_SRAM_SPI_CS, false);
-            pio_spi_write8_read8_blocking(&spi, out_buf, in_buf, BUF_LEN);
-            gpio_put(SIM_SRAM_SPI_CS, true);
-
-#if 0
-            printf("Write to addr %04x: ", addr);
-            ok = true;
-            data_buf = &out_buf[3];
-            for (int i = 0; i < 8; ++i) {
-                printf("%02hhx ", emu_ram[addr + i]);
-                if (data_buf[i] != emu_ram[addr + i]) ok = false;
-            }
-            printf("%s", ok ? "OK\r" : "FAIL!\n");
-#else
-            ok = true;
-            data_buf = &out_buf[3];
-            for (int i = 0; i < 9; ++i) {
-                if (data_buf[i] != emu_ram[addr + i]) ok = false;
-            }            
-#endif
-
-            //sleep_us(1);
-            if (!ok) {
-                printf("Write to addr %x: ", addr);
-                uint8_t* data_buf = &out_buf[3];
-                for (int i = 0; i < 8; ++i) {
-                    printf("%02hhx ", emu_ram[addr + i]);
-                }
-                printf("FAIL!\nExpected:             ");
-                for (int i = 0; i < 8; ++i) {
-                    printf("%02hhx ", data_buf[i]);
-                }
-                printf("\n");
-                //divider++;
-                speed_incr = 0;
-                break;
-            }
-        }
-        if (divider > 50) divider = 50;
-    }
-#else
-    int logic_sm = pio_claim_unused_sm(pio1, true);
-    logic_analyser_init(pio1, logic_sm, SIM_SRAM_SPI_MOSI, 4, 1);
+    // core1 does the real SPI RAM emulation (PIO/DMA, no room for prints in
+    // that loop). core0 is otherwise idle, so it just watches
+    // sram_last_transaction and reports over USB serial. Only prints when
+    // the (cmd, addr) actually changes, so a repeated fetch loop on the CPU
+    // side doesn't flood the terminal - plus a periodic heartbeat so you can
+    // tell it's still alive even when nothing is changing.
+    uint32_t last_seq = 0;
+    uint8_t  last_cmd = 0xFF;
+    uint16_t last_addr = 0;
+    bool     last_valid = false;
+    bool     first = true;
+    absolute_time_t last_heartbeat = get_absolute_time();
 
     while (true) {
-        while (gpio_get(SIM_SRAM_SPI_CS) == 0);
-        logic_analyser_arm(pio1, logic_sm, 11, logic_buf, 128, SIM_SRAM_SPI_CS, false);
-        while (gpio_get(SIM_SRAM_SPI_CS) == 1);
-        while (gpio_get(SIM_SRAM_SPI_CS) == 0);
-        print_capture_buf(logic_buf, SIM_SRAM_SPI_MOSI, 4, 128*8);
+        uint32_t seq = sram_last_transaction.seq;
+        if (seq != last_seq) {
+            last_seq = seq;
+            uint8_t  cmd   = sram_last_transaction.cmd;
+            uint16_t addr  = sram_last_transaction.addr;
+            bool     valid = sram_last_transaction.addr_valid;
+
+            if (first || cmd != last_cmd || addr != last_addr || valid != last_valid) {
+                const char* name = cmd == 0x03 ? "READ" :
+                                    cmd == 0x0B ? "FAST READ" :
+                                    cmd == 0x02 ? "WRITE" : "UNKNOWN";
+                if (valid) {
+                    printf("[#%u] %s addr=0x%04x data=0x%02x\n",
+                           (unsigned)seq, name, (unsigned)addr, (unsigned)emu_ram[addr]);
+                } else {
+                    printf("[#%u] %s (cmd=0x%02x)\n", (unsigned)seq, name, (unsigned)cmd);
+                }
+                last_cmd = cmd;
+                last_addr = addr;
+                last_valid = valid;
+                first = false;
+            }
+        }
+
+        if (absolute_time_diff_us(last_heartbeat, get_absolute_time()) > 2000000) {
+            printf("-- alive, %u SPI transactions handled so far --\n", (unsigned)seq);
+            last_heartbeat = get_absolute_time();
+        }
+
+        sleep_ms(5);
     }
-#endif
 }

@@ -1,0 +1,10 @@
+/* Override of pico-sdk's (empty) section_extra_post_data.incl.
+   Places emu_ram (tagged with __attribute__((section(".spi_ram.emu_ram")))
+   in sram.c) into the SPI_RAM region declared in memory_extra.incl. */
+SECTIONS
+{
+    .spi_ram (NOLOAD) : {
+        . = ALIGN(4);
+        *(.spi_ram*)
+    } > SPI_RAM
+}

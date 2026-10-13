@@ -46,8 +46,12 @@ target_link_libraries(${NAME}
     hardware_pio
 )
 
-set_target_properties(${NAME} PROPERTIES PICO_TARGET_LINKER_SCRIPT ${CMAKE_CURRENT_LIST_DIR}/sram_memmap.ld)
-pico_add_link_depend(${NAME} ${CMAKE_CURRENT_LIST_DIR}/sram_memmap.ld)
+# Use the SDK's own default linker script for the target platform (which
+# correctly handles RP2040 vs RP2350 boot metadata), only overriding the
+# memory layout pieces this project needs to reserve a fixed-address RAM
+# region for the emulated SPI RAM. See linker_overrides/ for details.
+# (sram_memmap.ld is no longer used - it predates RP2350/pico2_w support.)
+pico_add_linker_script_override_path(${NAME} ${CMAKE_CURRENT_LIST_DIR}/linker_overrides GLOB_FILES)
 
 pico_generate_pio_header(${NAME} ${CMAKE_CURRENT_LIST_DIR}/sram.pio)
 pico_generate_pio_header(${NAME} ${CMAKE_CURRENT_LIST_DIR}/spi.pio)

@@ -3,6 +3,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 
 // Configuration: GPIOs for the SPI interface
 #define SIM_SRAM_SPI_MOSI 2
@@ -32,3 +33,16 @@
 // the hardcoded DMA channels and SMs are claimed before other resources
 // are claimed.
 uint8_t* setup_simulated_sram();
+
+// Debug: record of the most recently completed SPI transaction, updated by
+// core1 after the transaction finishes (never inside the timing-critical
+// part of a READ). Poll `seq` from core0 to detect new transactions - it is
+// only ever incremented, never reset.
+typedef struct {
+    volatile uint32_t seq;
+    volatile uint8_t  cmd;         // 0x03 READ, 0x0B FAST READ, 0x02 WRITE
+    volatile uint16_t addr;        // valid only if addr_valid
+    volatile bool     addr_valid;
+} sram_transaction_log_t;
+
+extern volatile sram_transaction_log_t sram_last_transaction;
